@@ -11,6 +11,7 @@ from urllib.request import urlopen
 
 DEFAULT_ARTIST = "virtualluser"
 DEFAULT_ROOT_KEY = "tracks"
+MAX_SOURCE_BYTES = 5 * 1024 * 1024
 
 
 @dataclass
@@ -70,7 +71,19 @@ def load_source_payload(source_file: str | None, source_url: str | None) -> Any:
         raise ValueError("source_url must use the http or https scheme.")
 
     with urlopen(source_url, timeout=30) as response:  # nosec B310
-        return json.loads(response.read().decode("utf-8"))
+        content_type = (response.headers.get("Content-Type") or "").lower()
+        if "application/json" not in content_type and "+json" not in content_type:
+            raise ValueError("source_url must return a JSON response.")
+
+        content_length = response.headers.get("Content-Length")
+        if content_length and int(content_length) > MAX_SOURCE_BYTES:
+            raise ValueError(f"source_url response exceeds {MAX_SOURCE_BYTES} bytes.")
+
+        body = response.read(MAX_SOURCE_BYTES + 1)
+        if len(body) > MAX_SOURCE_BYTES:
+            raise ValueError(f"source_url response exceeds {MAX_SOURCE_BYTES} bytes.")
+
+        return json.loads(body.decode("utf-8"))
 
 
 def extract_items(payload: Any, root_key: str) -> Iterable[dict[str, Any]]:
@@ -120,10 +133,13 @@ def normalize_track(item: dict[str, Any], default_artist: str) -> TrackRecord:
     else:
         raise ValueError(f"Track tags must be a list or comma-separated string: {item}")
 
-    status = str(item.get("status") or ("archived" if item.get("archived") else "pending")).strip()
     archived_at = item.get("archived_at")
     if archived_at is not None:
         archived_at = str(archived_at).strip() or None
+    status = str(
+        item.get("status")
+        or ("archived" if item.get("archived") or archived_at else "pending")
+    ).strip()
 
     return TrackRecord(
         source_id=source_id,
