@@ -180,6 +180,44 @@ class GeneratorTests(unittest.TestCase):
 
         self.assertEqual(record.status, "archived")
 
+    def test_missing_tags_preserve_existing_tags(self) -> None:
+        first_payload = [
+            {
+                "id": "song-005",
+                "title": "Crystal Run",
+                "tags": ["retro", "night"],
+            }
+        ]
+        second_payload = [
+            {
+                "id": "song-005",
+                "title": "Crystal Run v2",
+            }
+        ]
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            database_path = Path(temp_dir) / "archive.db"
+
+            generator.import_tracks(
+                database_path=str(database_path),
+                payload=first_payload,
+                root_key="tracks",
+                default_artist="virtualluser",
+            )
+            generator.import_tracks(
+                database_path=str(database_path),
+                payload=second_payload,
+                root_key="tracks",
+                default_artist="virtualluser",
+            )
+
+            with sqlite3.connect(database_path) as connection:
+                row = connection.execute(
+                    "SELECT title, tags_json FROM tracks WHERE source_id = 'song-005'"
+                ).fetchone()
+
+            self.assertEqual(row, ("Crystal Run v2", '["retro", "night"]'))
+
 
 if __name__ == "__main__":
     unittest.main()

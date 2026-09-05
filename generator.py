@@ -23,7 +23,8 @@ class TrackRecord:
     audio_url: str | None
     status: str
     archived_at: str | None
-    tags: list[str]
+    tags: list[str] | None
+    tags_provided: bool
     raw_payload: str
 
 
@@ -78,11 +79,11 @@ def load_source_payload(source_file: str | None, source_url: str | None) -> Any:
         content_length = response.headers.get("Content-Length")
         if content_length:
             try:
-                if int(content_length) > MAX_SOURCE_BYTES:
-                    raise ValueError(f"source_url response exceeds {MAX_SOURCE_BYTES} bytes.")
+                parsed_content_length = int(content_length)
             except ValueError:
-                if content_length.isdigit():
-                    raise
+                parsed_content_length = None
+            if parsed_content_length is not None and parsed_content_length > MAX_SOURCE_BYTES:
+                raise ValueError(f"source_url response exceeds {MAX_SOURCE_BYTES} bytes.")
 
         body = response.read(MAX_SOURCE_BYTES + 1)
         if len(body) > MAX_SOURCE_BYTES:
@@ -130,11 +131,15 @@ def normalize_track(item: dict[str, Any], default_artist: str) -> TrackRecord:
     if not title:
         raise ValueError(f"Track record is missing a title: {item}")
 
-    tags = item.get("tags") or []
-    if isinstance(tags, str):
-        tags = [part.strip() for part in tags.split(",") if part.strip()]
-    elif isinstance(tags, list):
-        tags = [str(tag).strip() for tag in tags if str(tag).strip()]
+    raw_tags = item.get("tags") if "tags" in item else None
+    tags: list[str] | None
+    tags_provided = "tags" in item
+    if raw_tags is None and not tags_provided:
+        tags = None
+    elif isinstance(raw_tags, str):
+        tags = [part.strip() for part in raw_tags.split(",") if part.strip()]
+    elif isinstance(raw_tags, list):
+        tags = [str(tag).strip() for tag in raw_tags if str(tag).strip()]
     else:
         raise ValueError(f"Track tags must be a list or comma-separated string: {item}")
 
@@ -155,6 +160,7 @@ def normalize_track(item: dict[str, Any], default_artist: str) -> TrackRecord:
         status=status or "pending",
         archived_at=archived_at,
         tags=tags,
+        tags_provided=tags_provided,
         raw_payload=json.dumps(item, ensure_ascii=False, sort_keys=True),
     )
 
@@ -198,7 +204,7 @@ def upsert_tracks(connection: sqlite3.Connection, tracks: Iterable[TrackRecord])
             INSERT INTO tracks (
                 source_id, title, artist, source_url, audio_url, status, archived_at,
                 tags_json, raw_payload, first_seen_at, last_seen_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, COALESCE(?, '[]'), ?, ?, ?)
             ON CONFLICT(source_id) DO UPDATE SET
                 title = excluded.title,
                 artist = excluded.artist,
@@ -206,7 +212,7 @@ def upsert_tracks(connection: sqlite3.Connection, tracks: Iterable[TrackRecord])
                 audio_url = COALESCE(excluded.audio_url, tracks.audio_url),
                 status = excluded.status,
                 archived_at = COALESCE(excluded.archived_at, tracks.archived_at),
-                tags_json = excluded.tags_json,
+                tags_json = CASE WHEN ? THEN excluded.tags_json ELSE tracks.tags_json END,
                 raw_payload = excluded.raw_payload,
                 last_seen_at = excluded.last_seen_at
             """,
@@ -218,10 +224,11 @@ def upsert_tracks(connection: sqlite3.Connection, tracks: Iterable[TrackRecord])
                 track.audio_url,
                 track.status,
                 track.archived_at,
-                json.dumps(track.tags, ensure_ascii=False),
+                json.dumps(track.tags, ensure_ascii=False) if track.tags is not None else None,
                 track.raw_payload,
                 now,
                 now,
+                track.tags_provided,
             ),
         )
         imported += 1
