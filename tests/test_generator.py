@@ -9,9 +9,17 @@ import generator
 
 
 class FakeResponse:
-    def __init__(self, body: bytes, *, content_type: str, content_length: str | None = None) -> None:
+    def __init__(
+        self,
+        body: bytes,
+        *,
+        content_type: str,
+        content_length: str | None = None,
+        final_url: str = "https://example.com/tracks",
+    ) -> None:
         self._body = body
         self.headers = {"Content-Type": content_type}
+        self._final_url = final_url
         if content_length is not None:
             self.headers["Content-Length"] = content_length
 
@@ -25,6 +33,9 @@ class FakeResponse:
         if size < 0:
             return self._body
         return self._body[:size]
+
+    def geturl(self) -> str:
+        return self._final_url
 
 
 class GeneratorTests(unittest.TestCase):
@@ -47,6 +58,18 @@ class GeneratorTests(unittest.TestCase):
             return_value=FakeResponse(b"{}", content_type="application/json", content_length=huge_length),
         ):
             with self.assertRaisesRegex(ValueError, "exceeds"):
+                generator.load_source_payload(None, "https://example.com/tracks")
+
+    def test_load_source_payload_rejects_non_http_redirect_target(self) -> None:
+        with patch(
+            "generator.urlopen",
+            return_value=FakeResponse(
+                b"{}",
+                content_type="application/json",
+                final_url="file:///tmp/source.json",
+            ),
+        ):
+            with self.assertRaisesRegex(ValueError, "redirect must remain"):
                 generator.load_source_payload(None, "https://example.com/tracks")
 
     def test_load_and_import_from_file_payload(self) -> None:
@@ -217,6 +240,28 @@ class GeneratorTests(unittest.TestCase):
                 ).fetchone()
 
             self.assertEqual(row, ("Crystal Run v2", '["retro", "night"]'))
+
+    def test_invalid_late_record_does_not_rollback_prior_imports(self) -> None:
+        payload = [
+            {"id": "song-006", "title": "First Light"},
+            {"id": "song-007"},
+        ]
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            database_path = Path(temp_dir) / "archive.db"
+
+            with self.assertRaisesRegex(ValueError, "missing a title"):
+                generator.import_tracks(
+                    database_path=str(database_path),
+                    payload=payload,
+                    root_key="tracks",
+                    default_artist="virtualluser",
+                )
+
+            with sqlite3.connect(database_path) as connection:
+                count = connection.execute("SELECT COUNT(*) FROM tracks").fetchone()[0]
+
+            self.assertEqual(count, 1)
 
 
 if __name__ == "__main__":

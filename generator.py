@@ -72,6 +72,10 @@ def load_source_payload(source_file: str | None, source_url: str | None) -> Any:
         raise ValueError("source_url must use the http or https scheme.")
 
     with urlopen(source_url, timeout=30) as response:  # nosec B310
+        final_url = response.geturl()
+        if urlparse(final_url).scheme not in {"http", "https"}:
+            raise ValueError("source_url redirect must remain on http or https.")
+
         content_type = (response.headers.get("Content-Type") or "").lower()
         if "application/json" not in content_type and "+json" not in content_type:
             raise ValueError("source_url must return a JSON response.")
@@ -231,9 +235,8 @@ def upsert_tracks(connection: sqlite3.Connection, tracks: Iterable[TrackRecord])
                 track.tags_provided,
             ),
         )
+        connection.commit()
         imported += 1
-
-    connection.commit()
     return imported
 
 
