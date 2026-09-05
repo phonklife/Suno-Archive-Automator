@@ -335,6 +335,53 @@ class GeneratorTests(unittest.TestCase):
                 ),
             )
 
+    def test_explicit_null_optional_fields_clear_existing_values(self) -> None:
+        first_payload = [
+            {
+                "id": "song-009",
+                "title": "Clear Skies",
+                "url": "https://example.com/tracks/song-009",
+                "audio_url": "https://example.com/audio/song-009.mp3",
+                "archived_at": "2026-09-05T10:00:00+00:00",
+            }
+        ]
+        second_payload = [
+            {
+                "id": "song-009",
+                "title": "Clear Skies",
+                "source_url": "",
+                "audio_url": None,
+                "archived_at": "",
+            }
+        ]
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            database_path = Path(temp_dir) / "archive.db"
+
+            generator.import_tracks(
+                database_path=str(database_path),
+                payload=first_payload,
+                root_key="tracks",
+                default_artist="virtualluser",
+            )
+            generator.import_tracks(
+                database_path=str(database_path),
+                payload=second_payload,
+                root_key="tracks",
+                default_artist="virtualluser",
+            )
+
+            with sqlite3.connect(database_path) as connection:
+                row = connection.execute(
+                    """
+                    SELECT source_url, audio_url, archived_at
+                    FROM tracks
+                    WHERE source_id = 'song-009'
+                    """
+                ).fetchone()
+
+            self.assertEqual(row, (None, None, None))
+
 
 if __name__ == "__main__":
     unittest.main()

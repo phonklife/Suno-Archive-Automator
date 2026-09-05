@@ -75,6 +75,13 @@ Opcjonalne parametry:
 - `--root-key` — nazwa klucza z listą rekordów, domyślnie `tracks`,
 - `--default-artist` — domyślny wykonawca, gdy rekord nie zawiera `artist`.
 
+## Zasady aktualizacji rekordów
+
+- `artist`, `status`, `source_url`, `audio_url`, `archived_at` i `tags` pozostają bez zmian, jeśli pole nie występuje w aktualizacji.
+- jeśli `source_url`, `audio_url` albo `archived_at` zostanie przekazane jawnie jako pusty string albo `null`, zapis w bazie zostanie wyczyszczony,
+- jeśli rekord zawiera `archived_at`, status zostanie ustawiony na `archived`,
+- poprawne rekordy są zapisywane nawet wtedy, gdy późniejszy rekord z tej samej partii okaże się niepoprawny.
+
 ## Testy
 
 ```bash
