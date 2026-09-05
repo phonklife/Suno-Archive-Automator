@@ -63,6 +63,8 @@ class GeneratorTests(unittest.TestCase):
                 "id": "song-002",
                 "title": "Night Signal",
                 "tags": "electronic, cinematic",
+                "url": "https://example.com/tracks/song-002",
+                "audio_url": "https://example.com/audio/song-002.mp3",
             }
         ]
         second_payload = [
@@ -95,7 +97,7 @@ class GeneratorTests(unittest.TestCase):
             with sqlite3.connect(database_path) as connection:
                 row = connection.execute(
                     """
-                    SELECT title, artist, status, archived_at, tags_json
+                    SELECT title, artist, source_url, audio_url, status, archived_at, tags_json
                     FROM tracks
                     WHERE source_id = 'song-002'
                     """
@@ -108,6 +110,8 @@ class GeneratorTests(unittest.TestCase):
                 (
                     "Night Signal (Archive Cut)",
                     "guest",
+                    "https://example.com/tracks/song-002",
+                    "https://example.com/audio/song-002.mp3",
                     "archived",
                     "2026-09-05T10:00:00+00:00",
                     '["electronic"]',

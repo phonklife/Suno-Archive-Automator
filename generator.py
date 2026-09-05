@@ -181,10 +181,10 @@ def upsert_tracks(connection: sqlite3.Connection, tracks: Iterable[TrackRecord])
             ON CONFLICT(source_id) DO UPDATE SET
                 title = excluded.title,
                 artist = excluded.artist,
-                source_url = excluded.source_url,
-                audio_url = excluded.audio_url,
+                source_url = COALESCE(excluded.source_url, tracks.source_url),
+                audio_url = COALESCE(excluded.audio_url, tracks.audio_url),
                 status = excluded.status,
-                archived_at = excluded.archived_at,
+                archived_at = COALESCE(excluded.archived_at, tracks.archived_at),
                 tags_json = excluded.tags_json,
                 raw_payload = excluded.raw_payload,
                 last_seen_at = excluded.last_seen_at
