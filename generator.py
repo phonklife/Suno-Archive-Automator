@@ -214,46 +214,68 @@ def initialize_database(connection: sqlite3.Connection) -> None:
 
 
 def upsert_tracks(connection: sqlite3.Connection, tracks: Iterable[TrackRecord]) -> int:
+    """Upsert tracks while preserving earlier valid rows if a later row fails."""
     now = utcnow_iso()
     imported = 0
+    error: Exception | None = None
+    track_iterator = iter(tracks)
 
-    for track in tracks:
-        connection.execute(
-            """
-            INSERT INTO tracks (
-                source_id, title, artist, source_url, audio_url, status, archived_at,
-                tags_json, raw_payload, first_seen_at, last_seen_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, COALESCE(?, '[]'), ?, ?, ?)
-            ON CONFLICT(source_id) DO UPDATE SET
-                title = excluded.title,
-                artist = CASE WHEN ? THEN excluded.artist ELSE tracks.artist END,
-                source_url = COALESCE(excluded.source_url, tracks.source_url),
-                audio_url = COALESCE(excluded.audio_url, tracks.audio_url),
-                status = CASE WHEN ? THEN excluded.status ELSE tracks.status END,
-                archived_at = COALESCE(excluded.archived_at, tracks.archived_at),
-                tags_json = CASE WHEN ? THEN excluded.tags_json ELSE tracks.tags_json END,
-                raw_payload = excluded.raw_payload,
-                last_seen_at = excluded.last_seen_at
-            """,
-            (
-                track.source_id,
-                track.title,
-                track.artist,
-                track.source_url,
-                track.audio_url,
-                track.status,
-                track.archived_at,
-                json.dumps(track.tags, ensure_ascii=False) if track.tags is not None else None,
-                track.raw_payload,
-                now,
-                now,
-                track.artist_provided,
-                track.status_provided,
-                track.tags_provided,
-            ),
-        )
-        connection.commit()
-        imported += 1
+    while True:
+        try:
+            track = next(track_iterator)
+        except StopIteration:
+            break
+        except Exception as exc:
+            error = exc
+            break
+
+        connection.execute("SAVEPOINT track_import")
+        try:
+            connection.execute(
+                """
+                INSERT INTO tracks (
+                    source_id, title, artist, source_url, audio_url, status, archived_at,
+                    tags_json, raw_payload, first_seen_at, last_seen_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, COALESCE(?, '[]'), ?, ?, ?)
+                ON CONFLICT(source_id) DO UPDATE SET
+                    title = excluded.title,
+                    artist = CASE WHEN ? THEN excluded.artist ELSE tracks.artist END,
+                    source_url = COALESCE(excluded.source_url, tracks.source_url),
+                    audio_url = COALESCE(excluded.audio_url, tracks.audio_url),
+                    status = CASE WHEN ? THEN excluded.status ELSE tracks.status END,
+                    archived_at = COALESCE(excluded.archived_at, tracks.archived_at),
+                    tags_json = CASE WHEN ? THEN excluded.tags_json ELSE tracks.tags_json END,
+                    raw_payload = excluded.raw_payload,
+                    last_seen_at = excluded.last_seen_at
+                """,
+                (
+                    track.source_id,
+                    track.title,
+                    track.artist,
+                    track.source_url,
+                    track.audio_url,
+                    track.status,
+                    track.archived_at,
+                    json.dumps(track.tags, ensure_ascii=False) if track.tags is not None else None,
+                    track.raw_payload,
+                    now,
+                    now,
+                    track.artist_provided,
+                    track.status_provided,
+                    track.tags_provided,
+                ),
+            )
+            connection.execute("RELEASE SAVEPOINT track_import")
+            imported += 1
+        except Exception as exc:
+            connection.execute("ROLLBACK TO SAVEPOINT track_import")
+            connection.execute("RELEASE SAVEPOINT track_import")
+            error = exc
+            break
+
+    connection.commit()
+    if error is not None:
+        raise error
     return imported
 
 
