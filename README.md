@@ -1,2 +1,80 @@
 # Suno-Archive-Automator
-Zautomatyzowane archiwum motywów muzycznych opartych na bazie tematów muzycznych artysty virtualluser
+
+Zautomatyzowane archiwum motywów muzycznych oparte na imporcie danych źródłowych i zapisie metadanych do lokalnej bazy SQLite.
+
+## Co robi aktualna wersja
+
+Skrypt `generator.py`:
+
+- pobiera dane utworów z pliku JSON albo z endpointu HTTP(S),
+- normalizuje podstawowe metadane utworu,
+- zapisuje rekordy do bazy SQLite,
+- aktualizuje istniejące rekordy po `source_id`.
+
+## Wymagany format danych
+
+Źródło może być:
+
+- tablicą JSON:
+
+```json
+[
+  {
+    "id": "song-001",
+    "title": "Solar Echo",
+    "artist": "virtualluser",
+    "tags": ["ambient", "synthwave"],
+    "url": "https://example.com/tracks/song-001",
+    "audio_url": "https://example.com/audio/song-001.mp3"
+  }
+]
+```
+
+- albo obiektem zawierającym listę pod kluczem `tracks`:
+
+```json
+{
+  "tracks": [
+    {
+      "id": "song-001",
+      "title": "Solar Echo"
+    }
+  ]
+}
+```
+
+Obsługiwane pola:
+
+- `id` / `track_id` / `slug` / `url` — identyfikator źródłowy,
+- `title` / `name` — tytuł,
+- `artist` — wykonawca,
+- `url` / `source_url` — link źródłowy,
+- `audio_url` / `download_url` — link do audio,
+- `tags` — lista tagów lub string rozdzielony przecinkami,
+- `status` albo `archived`,
+- `archived_at`.
+
+## Użycie
+
+Import z pliku:
+
+```bash
+python generator.py --source-file source.json --database archive.db
+```
+
+Import z API:
+
+```bash
+python generator.py --source-url https://example.com/tracks.json --database archive.db
+```
+
+Opcjonalne parametry:
+
+- `--root-key` — nazwa klucza z listą rekordów, domyślnie `tracks`,
+- `--default-artist` — domyślny wykonawca, gdy rekord nie zawiera `artist`.
+
+## Testy
+
+```bash
+python -m unittest discover -s tests
+```
