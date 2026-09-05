@@ -8,6 +8,10 @@ import generator
 
 
 class GeneratorTests(unittest.TestCase):
+    def test_load_source_payload_rejects_non_http_scheme(self) -> None:
+        with self.assertRaisesRegex(ValueError, "http or https"):
+            generator.load_source_payload(None, "file:///tmp/source.json")
+
     def test_load_and_import_from_file_payload(self) -> None:
         payload = {
             "tracks": [

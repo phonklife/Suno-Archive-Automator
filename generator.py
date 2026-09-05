@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
+from urllib.parse import urlparse
 from urllib.request import urlopen
 
 
@@ -64,7 +65,11 @@ def load_source_payload(source_file: str | None, source_url: str | None) -> Any:
     if not source_url:
         raise ValueError("Either source_file or source_url must be provided.")
 
-    with urlopen(source_url) as response:  # nosec B310
+    parsed_url = urlparse(source_url)
+    if parsed_url.scheme not in {"http", "https"}:
+        raise ValueError("source_url must use the http or https scheme.")
+
+    with urlopen(source_url, timeout=30) as response:  # nosec B310
         return json.loads(response.read().decode("utf-8"))
 
 
