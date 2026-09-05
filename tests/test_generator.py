@@ -167,6 +167,19 @@ class GeneratorTests(unittest.TestCase):
 
         self.assertEqual(record.status, "archived")
 
+    def test_archived_at_overrides_conflicting_status(self) -> None:
+        record = generator.normalize_track(
+            {
+                "id": "song-004",
+                "title": "Orbit Fade",
+                "status": "pending",
+                "archived_at": "2026-09-05T10:00:00+00:00",
+            },
+            "virtualluser",
+        )
+
+        self.assertEqual(record.status, "archived")
+
 
 if __name__ == "__main__":
     unittest.main()

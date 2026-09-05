@@ -76,8 +76,13 @@ def load_source_payload(source_file: str | None, source_url: str | None) -> Any:
             raise ValueError("source_url must return a JSON response.")
 
         content_length = response.headers.get("Content-Length")
-        if content_length and int(content_length) > MAX_SOURCE_BYTES:
-            raise ValueError(f"source_url response exceeds {MAX_SOURCE_BYTES} bytes.")
+        if content_length:
+            try:
+                if int(content_length) > MAX_SOURCE_BYTES:
+                    raise ValueError(f"source_url response exceeds {MAX_SOURCE_BYTES} bytes.")
+            except ValueError:
+                if content_length.isdigit():
+                    raise
 
         body = response.read(MAX_SOURCE_BYTES + 1)
         if len(body) > MAX_SOURCE_BYTES:
@@ -136,10 +141,10 @@ def normalize_track(item: dict[str, Any], default_artist: str) -> TrackRecord:
     archived_at = item.get("archived_at")
     if archived_at is not None:
         archived_at = str(archived_at).strip() or None
-    status = str(
-        item.get("status")
-        or ("archived" if item.get("archived") or archived_at else "pending")
-    ).strip()
+    raw_status = str(item.get("status") or "").strip()
+    status = raw_status or "pending"
+    if item.get("archived") or archived_at:
+        status = "archived"
 
     return TrackRecord(
         source_id=source_id,
