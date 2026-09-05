@@ -238,7 +238,7 @@ def import_tracks(
     default_artist: str,
 ) -> int:
     items = extract_items(payload, root_key)
-    tracks = [normalize_track(item, default_artist) for item in items]
+    tracks = (normalize_track(item, default_artist) for item in items)
 
     with sqlite3.connect(database_path) as connection:
         initialize_database(connection)

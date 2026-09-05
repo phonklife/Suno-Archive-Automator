@@ -54,6 +54,8 @@ Obsługiwane pola:
 - `status` albo `archived`,
 - `archived_at`.
 
+Jeśli rekord zawiera `archived_at`, skrypt zapisze jego status jako `archived` nawet wtedy, gdy źródło przekaże konfliktującą wartość w polu `status`.
+
 ## Użycie
 
 Import z pliku:
