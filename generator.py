@@ -170,7 +170,7 @@ def normalize_track(item: dict[str, Any], default_artist: str) -> TrackRecord:
         archived_at = str(archived_at).strip() or None
     raw_status = str(item.get("status") or "").strip()
     status = raw_status or "pending"
-    status_provided = "status" in item or "archived" in item or archived_at is not None
+    status_provided = "status" in item or bool(item.get("archived")) or archived_at is not None
     if item.get("archived") or archived_at:
         status = "archived"
 
@@ -224,7 +224,6 @@ def initialize_database(connection: sqlite3.Connection) -> None:
 
 def upsert_tracks(connection: sqlite3.Connection, tracks: Iterable[TrackRecord]) -> int:
     """Upsert tracks while preserving earlier valid rows if a later row fails."""
-    now = utcnow_iso()
     imported = 0
     error: Exception | None = None
     track_iterator = iter(tracks)
@@ -240,6 +239,7 @@ def upsert_tracks(connection: sqlite3.Connection, tracks: Iterable[TrackRecord])
 
         connection.execute("SAVEPOINT track_import")
         try:
+            now = utcnow_iso()
             connection.execute(
                 """
                 INSERT INTO tracks (

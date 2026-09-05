@@ -382,6 +382,45 @@ class GeneratorTests(unittest.TestCase):
 
             self.assertEqual(row, (None, None, None))
 
+    def test_explicit_empty_tags_clear_existing_tags(self) -> None:
+        first_payload = [
+            {
+                "id": "song-010",
+                "title": "Tag Reset",
+                "tags": ["one", "two"],
+            }
+        ]
+        second_payload = [
+            {
+                "id": "song-010",
+                "title": "Tag Reset",
+                "tags": [],
+            }
+        ]
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            database_path = Path(temp_dir) / "archive.db"
+
+            generator.import_tracks(
+                database_path=str(database_path),
+                payload=first_payload,
+                root_key="tracks",
+                default_artist="virtualluser",
+            )
+            generator.import_tracks(
+                database_path=str(database_path),
+                payload=second_payload,
+                root_key="tracks",
+                default_artist="virtualluser",
+            )
+
+            with sqlite3.connect(database_path) as connection:
+                row = connection.execute(
+                    "SELECT tags_json FROM tracks WHERE source_id = 'song-010'"
+                ).fetchone()
+
+            self.assertEqual(row, ('[]',))
+
 
 if __name__ == "__main__":
     unittest.main()

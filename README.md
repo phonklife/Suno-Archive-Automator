@@ -79,6 +79,7 @@ Opcjonalne parametry:
 
 - `artist`, `status`, `source_url`, `audio_url`, `archived_at` i `tags` pozostają bez zmian, jeśli pole nie występuje w aktualizacji.
 - jeśli `source_url`, `audio_url` albo `archived_at` zostanie przekazane jawnie jako pusty string albo `null`, zapis w bazie zostanie wyczyszczony,
+- jeśli `tags` zostanie przekazane jawnie jako pusta lista, zapisane tagi zostaną wyczyszczone,
 - jeśli rekord zawiera `archived_at`, status zostanie ustawiony na `archived`,
 - poprawne rekordy są zapisywane nawet wtedy, gdy późniejszy rekord z tej samej partii okaże się niepoprawny.
 
