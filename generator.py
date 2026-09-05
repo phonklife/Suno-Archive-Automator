@@ -5,8 +5,8 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
-from urllib.parse import urlparse
-from urllib.request import urlopen
+from urllib.parse import urljoin, urlparse
+from urllib.request import HTTPRedirectHandler, build_opener
 
 
 DEFAULT_ARTIST = "virtualluser"
@@ -19,13 +19,23 @@ class TrackRecord:
     source_id: str
     title: str
     artist: str
+    artist_provided: bool
     source_url: str | None
     audio_url: str | None
     status: str
+    status_provided: bool
     archived_at: str | None
     tags: list[str] | None
     tags_provided: bool
     raw_payload: str
+
+
+class SafeRedirectHandler(HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # type: ignore[override]
+        target_url = urljoin(req.full_url, newurl)
+        if urlparse(target_url).scheme not in {"http", "https"}:
+            raise ValueError("source_url redirect must remain on http or https.")
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
 def utcnow_iso() -> str:
@@ -71,7 +81,8 @@ def load_source_payload(source_file: str | None, source_url: str | None) -> Any:
     if parsed_url.scheme not in {"http", "https"}:
         raise ValueError("source_url must use the http or https scheme.")
 
-    with urlopen(source_url, timeout=30) as response:  # nosec B310
+    opener = build_opener(SafeRedirectHandler())
+    with opener.open(source_url, timeout=30) as response:  # nosec B310
         final_url = response.geturl()
         if urlparse(final_url).scheme not in {"http", "https"}:
             raise ValueError("source_url redirect must remain on http or https.")
@@ -135,6 +146,7 @@ def normalize_track(item: dict[str, Any], default_artist: str) -> TrackRecord:
     if not title:
         raise ValueError(f"Track record is missing a title: {item}")
 
+    artist_provided = "artist" in item and bool(str(item.get("artist") or "").strip())
     raw_tags = item.get("tags") if "tags" in item else None
     tags: list[str] | None
     tags_provided = "tags" in item
@@ -152,6 +164,7 @@ def normalize_track(item: dict[str, Any], default_artist: str) -> TrackRecord:
         archived_at = str(archived_at).strip() or None
     raw_status = str(item.get("status") or "").strip()
     status = raw_status or "pending"
+    status_provided = "status" in item or "archived" in item or archived_at is not None
     if item.get("archived") or archived_at:
         status = "archived"
 
@@ -159,9 +172,11 @@ def normalize_track(item: dict[str, Any], default_artist: str) -> TrackRecord:
         source_id=source_id,
         title=title,
         artist=str(item.get("artist") or default_artist).strip() or default_artist,
+        artist_provided=artist_provided,
         source_url=_optional_str(item.get("source_url") or item.get("url")),
         audio_url=_optional_str(item.get("audio_url") or item.get("download_url")),
         status=status or "pending",
+        status_provided=status_provided,
         archived_at=archived_at,
         tags=tags,
         tags_provided=tags_provided,
@@ -211,10 +226,10 @@ def upsert_tracks(connection: sqlite3.Connection, tracks: Iterable[TrackRecord])
             ) VALUES (?, ?, ?, ?, ?, ?, ?, COALESCE(?, '[]'), ?, ?, ?)
             ON CONFLICT(source_id) DO UPDATE SET
                 title = excluded.title,
-                artist = excluded.artist,
+                artist = CASE WHEN ? THEN excluded.artist ELSE tracks.artist END,
                 source_url = COALESCE(excluded.source_url, tracks.source_url),
                 audio_url = COALESCE(excluded.audio_url, tracks.audio_url),
-                status = excluded.status,
+                status = CASE WHEN ? THEN excluded.status ELSE tracks.status END,
                 archived_at = COALESCE(excluded.archived_at, tracks.archived_at),
                 tags_json = CASE WHEN ? THEN excluded.tags_json ELSE tracks.tags_json END,
                 raw_payload = excluded.raw_payload,
@@ -232,6 +247,8 @@ def upsert_tracks(connection: sqlite3.Connection, tracks: Iterable[TrackRecord])
                 track.raw_payload,
                 now,
                 now,
+                track.artist_provided,
+                track.status_provided,
                 track.tags_provided,
             ),
         )

@@ -4,6 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
+from urllib.request import Request
 
 import generator
 
@@ -38,6 +39,14 @@ class FakeResponse:
         return self._final_url
 
 
+class FakeOpener:
+    def __init__(self, response: FakeResponse) -> None:
+        self._response = response
+
+    def open(self, source_url: str, timeout: int = 30) -> FakeResponse:
+        return self._response
+
+
 class GeneratorTests(unittest.TestCase):
     def test_load_source_payload_rejects_non_http_scheme(self) -> None:
         with self.assertRaisesRegex(ValueError, "http or https"):
@@ -45,8 +54,8 @@ class GeneratorTests(unittest.TestCase):
 
     def test_load_source_payload_requires_json_response(self) -> None:
         with patch(
-            "generator.urlopen",
-            return_value=FakeResponse(b"<html></html>", content_type="text/html"),
+            "generator.build_opener",
+            return_value=FakeOpener(FakeResponse(b"<html></html>", content_type="text/html")),
         ):
             with self.assertRaisesRegex(ValueError, "JSON response"):
                 generator.load_source_payload(None, "https://example.com/tracks")
@@ -54,23 +63,34 @@ class GeneratorTests(unittest.TestCase):
     def test_load_source_payload_rejects_large_response(self) -> None:
         huge_length = str(generator.MAX_SOURCE_BYTES + 1)
         with patch(
-            "generator.urlopen",
-            return_value=FakeResponse(b"{}", content_type="application/json", content_length=huge_length),
+            "generator.build_opener",
+            return_value=FakeOpener(
+                FakeResponse(b"{}", content_type="application/json", content_length=huge_length)
+            ),
         ):
             with self.assertRaisesRegex(ValueError, "exceeds"):
                 generator.load_source_payload(None, "https://example.com/tracks")
 
     def test_load_source_payload_rejects_non_http_redirect_target(self) -> None:
         with patch(
-            "generator.urlopen",
-            return_value=FakeResponse(
-                b"{}",
-                content_type="application/json",
-                final_url="file:///tmp/source.json",
+            "generator.build_opener",
+            return_value=FakeOpener(
+                FakeResponse(
+                    b"{}",
+                    content_type="application/json",
+                    final_url="file:///tmp/source.json",
+                )
             ),
         ):
             with self.assertRaisesRegex(ValueError, "redirect must remain"):
                 generator.load_source_payload(None, "https://example.com/tracks")
+
+    def test_redirect_handler_rejects_non_http_redirect_target(self) -> None:
+        handler = generator.SafeRedirectHandler()
+        request = Request("https://example.com/tracks")
+
+        with self.assertRaisesRegex(ValueError, "redirect must remain"):
+            handler.redirect_request(request, None, 302, "Found", {}, "file:///tmp/source.json")
 
     def test_load_and_import_from_file_payload(self) -> None:
         payload = {
@@ -262,6 +282,58 @@ class GeneratorTests(unittest.TestCase):
                 count = connection.execute("SELECT COUNT(*) FROM tracks").fetchone()[0]
 
             self.assertEqual(count, 1)
+
+    def test_missing_artist_and_status_preserve_existing_values(self) -> None:
+        first_payload = [
+            {
+                "id": "song-008",
+                "title": "Signal Bloom",
+                "artist": "original-artist",
+                "status": "archived",
+                "archived_at": "2026-09-05T10:00:00+00:00",
+            }
+        ]
+        second_payload = [
+            {
+                "id": "song-008",
+                "title": "Signal Bloom Remaster",
+            }
+        ]
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            database_path = Path(temp_dir) / "archive.db"
+
+            generator.import_tracks(
+                database_path=str(database_path),
+                payload=first_payload,
+                root_key="tracks",
+                default_artist="virtualluser",
+            )
+            generator.import_tracks(
+                database_path=str(database_path),
+                payload=second_payload,
+                root_key="tracks",
+                default_artist="virtualluser",
+            )
+
+            with sqlite3.connect(database_path) as connection:
+                row = connection.execute(
+                    """
+                    SELECT title, artist, status, archived_at
+                    FROM tracks
+                    WHERE source_id = 'song-008'
+                    """
+                ).fetchone()
+
+            self.assertEqual(
+                row,
+                (
+                    "Signal Bloom Remaster",
+                    "original-artist",
+                    "archived",
+                    "2026-09-05T10:00:00+00:00",
+                ),
+            )
 
 
 if __name__ == "__main__":
