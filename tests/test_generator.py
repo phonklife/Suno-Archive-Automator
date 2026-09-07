@@ -1,7 +1,9 @@
 import json
 import sqlite3
+import sys
 import tempfile
 import unittest
+from io import StringIO
 from pathlib import Path
 from unittest.mock import patch
 from urllib.request import Request
@@ -420,6 +422,292 @@ class GeneratorTests(unittest.TestCase):
                 ).fetchone()
 
             self.assertEqual(row, ('[]',))
+
+
+class ParseArgsTests(unittest.TestCase):
+    """CLI argument parsing tests."""
+
+    def test_parse_args_requires_source(self) -> None:
+        """Both --source-file and --source-url missing should fail."""
+        with patch("sys.argv", ["generator.py"]):
+            with self.assertRaises(SystemExit):
+                generator.parse_args()
+
+    def test_parse_args_mutually_exclusive_sources(self) -> None:
+        """--source-file and --source-url together should fail."""
+        with patch("sys.argv", ["generator.py", "--source-file", "f.json", "--source-url", "https://example.com"]):
+            with self.assertRaises(SystemExit):
+                generator.parse_args()
+
+    def test_parse_args_source_file_only(self) -> None:
+        """--source-file alone is valid."""
+        with patch("sys.argv", ["generator.py", "--source-file", "/path/to/source.json"]):
+            args = generator.parse_args()
+            self.assertEqual(args.source_file, "/path/to/source.json")
+            self.assertIsNone(args.source_url)
+
+    def test_parse_args_source_url_only(self) -> None:
+        """--source-url alone is valid."""
+        with patch("sys.argv", ["generator.py", "--source-url", "https://example.com/tracks"]):
+            args = generator.parse_args()
+            self.assertIsNone(args.source_file)
+            self.assertEqual(args.source_url, "https://example.com/tracks")
+
+    def test_parse_args_default_database(self) -> None:
+        """--database defaults to 'archive.db'."""
+        with patch("sys.argv", ["generator.py", "--source-file", "f.json"]):
+            args = generator.parse_args()
+            self.assertEqual(args.database, "archive.db")
+
+    def test_parse_args_custom_database(self) -> None:
+        """--database can be customized."""
+        with patch("sys.argv", ["generator.py", "--source-file", "f.json", "--database", "custom.db"]):
+            args = generator.parse_args()
+            self.assertEqual(args.database, "custom.db")
+
+    def test_parse_args_default_root_key(self) -> None:
+        """--root-key defaults to 'tracks'."""
+        with patch("sys.argv", ["generator.py", "--source-file", "f.json"]):
+            args = generator.parse_args()
+            self.assertEqual(args.root_key, "tracks")
+
+    def test_parse_args_custom_root_key(self) -> None:
+        """--root-key can be customized."""
+        with patch("sys.argv", ["generator.py", "--source-file", "f.json", "--root-key", "songs"]):
+            args = generator.parse_args()
+            self.assertEqual(args.root_key, "songs")
+
+    def test_parse_args_default_artist(self) -> None:
+        """--default-artist defaults to 'virtualluser'."""
+        with patch("sys.argv", ["generator.py", "--source-file", "f.json"]):
+            args = generator.parse_args()
+            self.assertEqual(args.default_artist, "virtualluser")
+
+    def test_parse_args_custom_default_artist(self) -> None:
+        """--default-artist can be customized."""
+        with patch("sys.argv", ["generator.py", "--source-file", "f.json", "--default-artist", "guest-artist"]):
+            args = generator.parse_args()
+            self.assertEqual(args.default_artist, "guest-artist")
+
+    def test_parse_args_all_options_together(self) -> None:
+        """All options can be combined."""
+        with patch(
+            "sys.argv",
+            [
+                "generator.py",
+                "--source-url",
+                "https://example.com/api/tracks",
+                "--database",
+                "music.db",
+                "--root-key",
+                "items",
+                "--default-artist",
+                "unknown",
+            ],
+        ):
+            args = generator.parse_args()
+            self.assertIsNone(args.source_file)
+            self.assertEqual(args.source_url, "https://example.com/api/tracks")
+            self.assertEqual(args.database, "music.db")
+            self.assertEqual(args.root_key, "items")
+            self.assertEqual(args.default_artist, "unknown")
+
+
+class MainFunctionTests(unittest.TestCase):
+    """End-to-end main() function tests."""
+
+    def test_main_successful_import_from_file(self) -> None:
+        """main() with --source-file should succeed and return 0."""
+        payload = {"tracks": [{"id": "1", "title": "Test Track"}]}
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            source_file = Path(temp_dir) / "source.json"
+            database = Path(temp_dir) / "test.db"
+
+            source_file.write_text(json.dumps(payload), encoding="utf-8")
+
+            with patch(
+                "sys.argv",
+                ["generator.py", "--source-file", str(source_file), "--database", str(database)],
+            ):
+                with patch("builtins.print") as mock_print:
+                    exit_code = generator.main()
+
+            self.assertEqual(exit_code, 0)
+            mock_print.assert_called_once()
+            call_args = mock_print.call_args[0][0]
+            self.assertIn("Imported 1 track", call_args)
+            self.assertIn(str(database), call_args)
+
+            # Verify database was created and populated
+            with sqlite3.connect(database) as conn:
+                row = conn.execute("SELECT source_id, title FROM tracks WHERE source_id = '1'").fetchone()
+                self.assertEqual(row, ("1", "Test Track"))
+
+    def test_main_successful_import_from_url(self) -> None:
+        """main() with --source-url should succeed via mocked HTTP."""
+        payload = {"tracks": [{"id": "song-1", "title": "Remote Track", "artist": "remote-artist"}]}
+        payload_json = json.dumps(payload).encode("utf-8")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            database = Path(temp_dir) / "test.db"
+
+            with patch(
+                "generator.build_opener",
+                return_value=FakeOpener(
+                    FakeResponse(payload_json, content_type="application/json")
+                ),
+            ):
+                with patch(
+                    "sys.argv",
+                    ["generator.py", "--source-url", "https://example.com/tracks", "--database", str(database)],
+                ):
+                    with patch("builtins.print") as mock_print:
+                        exit_code = generator.main()
+
+            self.assertEqual(exit_code, 0)
+            mock_print.assert_called_once()
+            call_args = mock_print.call_args[0][0]
+            self.assertIn("Imported 1 track", call_args)
+
+            # Verify database was created and populated
+            with sqlite3.connect(database) as conn:
+                row = conn.execute(
+                    "SELECT source_id, title, artist FROM tracks WHERE source_id = 'song-1'"
+                ).fetchone()
+                self.assertEqual(row, ("song-1", "Remote Track", "remote-artist"))
+
+    def test_main_custom_root_key(self) -> None:
+        """main() with --root-key should use custom key."""
+        payload = {"songs": [{"id": "2", "title": "Alternative Root"}]}
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            source_file = Path(temp_dir) / "source.json"
+            database = Path(temp_dir) / "test.db"
+
+            source_file.write_text(json.dumps(payload), encoding="utf-8")
+
+            with patch(
+                "sys.argv",
+                [
+                    "generator.py",
+                    "--source-file",
+                    str(source_file),
+                    "--database",
+                    str(database),
+                    "--root-key",
+                    "songs",
+                ],
+            ):
+                exit_code = generator.main()
+
+            self.assertEqual(exit_code, 0)
+
+            with sqlite3.connect(database) as conn:
+                row = conn.execute("SELECT title FROM tracks WHERE source_id = '2'").fetchone()
+                self.assertEqual(row[0], "Alternative Root")
+
+    def test_main_custom_default_artist(self) -> None:
+        """main() with --default-artist should use fallback artist."""
+        payload = {"tracks": [{"id": "3", "title": "Artist Fallback"}]}
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            source_file = Path(temp_dir) / "source.json"
+            database = Path(temp_dir) / "test.db"
+
+            source_file.write_text(json.dumps(payload), encoding="utf-8")
+
+            with patch(
+                "sys.argv",
+                [
+                    "generator.py",
+                    "--source-file",
+                    str(source_file),
+                    "--database",
+                    str(database),
+                    "--default-artist",
+                    "fallback-artist",
+                ],
+            ):
+                exit_code = generator.main()
+
+            self.assertEqual(exit_code, 0)
+
+            with sqlite3.connect(database) as conn:
+                row = conn.execute("SELECT artist FROM tracks WHERE source_id = '3'").fetchone()
+                self.assertEqual(row[0], "fallback-artist")
+
+    def test_main_missing_source_file(self) -> None:
+        """main() with non-existent file should raise error."""
+        with patch(
+            "sys.argv",
+            ["generator.py", "--source-file", "/nonexistent/path/source.json"],
+        ):
+            with self.assertRaises(FileNotFoundError):
+                generator.main()
+
+    def test_main_invalid_json(self) -> None:
+        """main() with invalid JSON should raise error."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            source_file = Path(temp_dir) / "bad.json"
+            database = Path(temp_dir) / "test.db"
+
+            source_file.write_text("not valid json", encoding="utf-8")
+
+            with patch(
+                "sys.argv",
+                ["generator.py", "--source-file", str(source_file), "--database", str(database)],
+            ):
+                with self.assertRaises(json.JSONDecodeError):
+                    generator.main()
+
+    def test_main_invalid_payload_missing_root_key(self) -> None:
+        """main() with missing root key should fail."""
+        payload = {"wrong_key": []}
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            source_file = Path(temp_dir) / "source.json"
+            database = Path(temp_dir) / "test.db"
+
+            source_file.write_text(json.dumps(payload), encoding="utf-8")
+
+            with patch(
+                "sys.argv",
+                ["generator.py", "--source-file", str(source_file), "--database", str(database)],
+            ):
+                with self.assertRaisesRegex(ValueError, "does not contain the configured root key"):
+                    generator.main()
+
+    def test_main_multiple_tracks(self) -> None:
+        """main() should import multiple tracks correctly."""
+        payload = {
+            "tracks": [
+                {"id": "1", "title": "Track 1"},
+                {"id": "2", "title": "Track 2", "artist": "custom-artist"},
+                {"id": "3", "title": "Track 3", "tags": ["tag1", "tag2"]},
+            ]
+        }
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            source_file = Path(temp_dir) / "source.json"
+            database = Path(temp_dir) / "test.db"
+
+            source_file.write_text(json.dumps(payload), encoding="utf-8")
+
+            with patch(
+                "sys.argv",
+                ["generator.py", "--source-file", str(source_file), "--database", str(database)],
+            ):
+                with patch("builtins.print") as mock_print:
+                    exit_code = generator.main()
+
+            self.assertEqual(exit_code, 0)
+            call_args = mock_print.call_args[0][0]
+            self.assertIn("Imported 3 track", call_args)
+
+            with sqlite3.connect(database) as conn:
+                count = conn.execute("SELECT COUNT(*) FROM tracks").fetchone()[0]
+                self.assertEqual(count, 3)
 
 
 if __name__ == "__main__":
